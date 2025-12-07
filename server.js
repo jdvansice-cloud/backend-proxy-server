@@ -1627,11 +1627,21 @@ app.post('/api/clients/login', async (req, res) => {
         );
         
         const clients = searchResponse.data.Clients || [];
-        console.log('   Found', clients.length, 'potential matches');
+        console.log('   Found', clients.length, 'potential matches from Mindbody');
         
         // Normalize phone for comparison (remove all non-digits)
         const normalizePhone = (phone) => phone ? phone.replace(/\D/g, '') : '';
         const searchNormalized = normalizePhone(username);
+        
+        // For phone searches, extract the local number (last 8 digits for Panama)
+        const getLocalNumber = (phone) => {
+            const normalized = normalizePhone(phone);
+            // If number is longer than 8 digits, get last 8 (local number without country code)
+            return normalized.length > 8 ? normalized.slice(-8) : normalized;
+        };
+        
+        const searchLocal = getLocalNumber(username);
+        console.log('   Search normalized:', searchNormalized, '| Local:', searchLocal);
         
         // Filter to matching clients based on search type
         let matchingClients = [];
@@ -1641,17 +1651,23 @@ app.post('/api/clients/login', async (req, res) => {
             matchingClients = clients.filter(c => 
                 c.Email && c.Email.toLowerCase() === username.toLowerCase()
             );
-        } else if (searchType === 'phone' || /^[\d\s\-\+\(\)]+$/.test(username)) {
+        } else if (searchType === 'phone' || /^[\d\s\-\+\(\)\.]+$/.test(username)) {
             // Phone search - match against MobilePhone, HomePhone, WorkPhone
+            // Use local number (last 8 digits) for flexible matching
             matchingClients = clients.filter(c => {
-                const mobile = normalizePhone(c.MobilePhone);
-                const home = normalizePhone(c.HomePhone);
-                const work = normalizePhone(c.WorkPhone);
+                const mobileLocal = getLocalNumber(c.MobilePhone);
+                const homeLocal = getLocalNumber(c.HomePhone);
+                const workLocal = getLocalNumber(c.WorkPhone);
                 
-                // Check if any phone contains or equals the search
-                return (mobile && (mobile.includes(searchNormalized) || searchNormalized.includes(mobile))) ||
-                       (home && (home.includes(searchNormalized) || searchNormalized.includes(home))) ||
-                       (work && (work.includes(searchNormalized) || searchNormalized.includes(work)));
+                // Match if local numbers are equal or contain each other
+                const matches = (mobileLocal && (mobileLocal === searchLocal || mobileLocal.includes(searchLocal) || searchLocal.includes(mobileLocal))) ||
+                       (homeLocal && (homeLocal === searchLocal || homeLocal.includes(searchLocal) || searchLocal.includes(homeLocal))) ||
+                       (workLocal && (workLocal === searchLocal || workLocal.includes(searchLocal) || searchLocal.includes(workLocal)));
+                
+                if (matches) {
+                    console.log('   ✓ Match:', c.FirstName, c.LastName, '| Mobile:', c.MobilePhone);
+                }
+                return matches;
             });
         } else {
             // Fallback - try email first, then phone
@@ -1660,8 +1676,8 @@ app.post('/api/clients/login', async (req, res) => {
             );
             if (matchingClients.length === 0) {
                 matchingClients = clients.filter(c => {
-                    const mobile = normalizePhone(c.MobilePhone);
-                    return mobile && mobile.includes(searchNormalized);
+                    const mobileLocal = getLocalNumber(c.MobilePhone);
+                    return mobileLocal && (mobileLocal === searchLocal || mobileLocal.includes(searchLocal) || searchLocal.includes(mobileLocal));
                 });
             }
         }
