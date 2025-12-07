@@ -1624,18 +1624,10 @@ app.post('/api/clients/login', async (req, res) => {
         const isPhone = searchType === 'phone' || (/^[\d\s\-\+\(\)\.]+$/.test(username) && !username.includes('@'));
         const searchLocal = getLocalNumber(username);
         
-        // For phone searches, use last 6-7 digits to get broader results from Mindbody
-        let searchQuery = username;
-        if (isPhone && searchLocal.length >= 7) {
-            // Use last 7 digits for search to get more potential matches
-            searchQuery = searchLocal.slice(-7);
-            console.log('   Using partial phone for broader search:', searchQuery);
-        }
-        
-        // Search for client using SearchText
-        console.log('   Searching Mindbody with query:', searchQuery);
+        // Search for client using SearchText with original query
+        console.log('   Searching Mindbody with:', username);
         const searchResponse = await axios.get(
-            `${CONFIG.baseUrl}/client/clients?searchText=${encodeURIComponent(searchQuery)}&limit=100`,
+            `${CONFIG.baseUrl}/client/clients?searchText=${encodeURIComponent(username)}&limit=100`,
             {
                 headers: {
                     'Api-Key': CONFIG.apiKey,
@@ -1646,7 +1638,7 @@ app.post('/api/clients/login', async (req, res) => {
             }
         );
         
-        const clients = searchResponse.data.Clients || [];
+        let clients = searchResponse.data.Clients || [];
         console.log('   Mindbody returned', clients.length, 'clients');
         
         // Log all clients for debugging
@@ -1680,6 +1672,13 @@ app.post('/api/clients/login', async (req, res) => {
                 }
                 return matches;
             });
+            
+            // If strict matching found nothing but Mindbody returned results, use all of them
+            // Mindbody already did the phone matching for us
+            if (matchingClients.length === 0 && clients.length > 0) {
+                console.log('   Strict matching found 0, returning all', clients.length, 'Mindbody results');
+                matchingClients = clients;
+            }
         } else {
             // Fallback - try email first, then phone
             matchingClients = clients.filter(c => 
