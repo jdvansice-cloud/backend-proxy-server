@@ -1624,40 +1624,71 @@ app.post('/api/clients/login', async (req, res) => {
         const isPhone = searchType === 'phone' || (/^[\d\s\-\+\(\)\.]+$/.test(username) && !username.includes('@'));
         const searchLocal = getLocalNumber(username);
         
-        // Search for client using SearchText with original query
-        console.log('   Searching Mindbody with:', username);
-        const searchResponse = await axios.get(
-            `${CONFIG.baseUrl}/client/clients?searchText=${encodeURIComponent(username)}&limit=100`,
-            {
-                headers: {
-                    'Api-Key': CONFIG.apiKey,
-                    'SiteId': CONFIG.siteId,
-                    'Authorization': authToken,
-                    'Content-Type': 'application/json'
-                }
+        // For phone searches, we need to search multiple formats because Mindbody 
+        // stores phones differently (66124546 vs 5.076.612.4546)
+        let allClients = [];
+        const searchQueries = [username];
+        
+        if (isPhone) {
+            // Add different phone format searches
+            const digits = normalizePhone(username);
+            
+            // If 8 digits (local), also search with country code formats
+            if (digits.length === 8) {
+                searchQueries.push(`507${digits}`);  // 50766124546
+                searchQueries.push(`+507${digits}`); // +50766124546
             }
-        );
+            // If has country code, also search without it
+            if (digits.length > 8) {
+                searchQueries.push(digits.slice(-8)); // Last 8 digits
+            }
+        }
         
-        let clients = searchResponse.data.Clients || [];
-        console.log('   Mindbody returned', clients.length, 'clients');
+        // Search with each query and combine results
+        for (const query of searchQueries) {
+            console.log('   Searching Mindbody with:', query);
+            try {
+                const searchResponse = await axios.get(
+                    `${CONFIG.baseUrl}/client/clients?searchText=${encodeURIComponent(query)}&limit=100`,
+                    {
+                        headers: {
+                            'Api-Key': CONFIG.apiKey,
+                            'SiteId': CONFIG.siteId,
+                            'Authorization': authToken,
+                            'Content-Type': 'application/json'
+                        }
+                    }
+                );
+                
+                const clients = searchResponse.data.Clients || [];
+                console.log('   -> Found', clients.length, 'clients');
+                
+                // Add new clients (avoid duplicates by Id)
+                clients.forEach(c => {
+                    if (!allClients.find(existing => existing.Id === c.Id)) {
+                        allClients.push(c);
+                        console.log('   + ', c.FirstName, c.LastName, '| Mobile:', c.MobilePhone, '| Email:', c.Email);
+                    }
+                });
+            } catch (err) {
+                console.log('   Search error for', query, ':', err.message);
+            }
+        }
         
-        // Log all clients for debugging
-        clients.forEach(c => {
-            console.log('   - ', c.FirstName, c.LastName, '| Mobile:', c.MobilePhone, '| Email:', c.Email);
-        });
+        console.log('   Total unique clients found:', allClients.length);
         
         // Filter to matching clients based on search type
         let matchingClients = [];
         
         if (searchType === 'email' || username.includes('@')) {
             // Email search - exact match (case insensitive)
-            matchingClients = clients.filter(c => 
+            matchingClients = allClients.filter(c => 
                 c.Email && c.Email.toLowerCase() === username.toLowerCase()
             );
         } else if (isPhone) {
             // Phone search - match against MobilePhone, HomePhone, WorkPhone
             // Use local number (last 8 digits) for flexible matching
-            matchingClients = clients.filter(c => {
+            matchingClients = allClients.filter(c => {
                 const mobileLocal = getLocalNumber(c.MobilePhone);
                 const homeLocal = getLocalNumber(c.HomePhone);
                 const workLocal = getLocalNumber(c.WorkPhone);
@@ -1673,19 +1704,18 @@ app.post('/api/clients/login', async (req, res) => {
                 return matches;
             });
             
-            // If strict matching found nothing but Mindbody returned results, use all of them
-            // Mindbody already did the phone matching for us
-            if (matchingClients.length === 0 && clients.length > 0) {
-                console.log('   Strict matching found 0, returning all', clients.length, 'Mindbody results');
-                matchingClients = clients;
+            // If strict matching found nothing but we found results, use all of them
+            if (matchingClients.length === 0 && allClients.length > 0) {
+                console.log('   Strict matching found 0, returning all', allClients.length, 'results');
+                matchingClients = allClients;
             }
         } else {
             // Fallback - try email first, then phone
-            matchingClients = clients.filter(c => 
+            matchingClients = allClients.filter(c => 
                 c.Email && c.Email.toLowerCase() === username.toLowerCase()
             );
             if (matchingClients.length === 0) {
-                matchingClients = clients.filter(c => {
+                matchingClients = allClients.filter(c => {
                     const mobileLocal = getLocalNumber(c.MobilePhone);
                     return mobileLocal && mobileLocal === searchLocal;
                 });
