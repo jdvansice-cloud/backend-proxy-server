@@ -1612,10 +1612,30 @@ app.post('/api/clients/login', async (req, res) => {
             authToken = tokenResponse.data.AccessToken;
         }
         
-        // Search for client using SearchText (searches email, phone, name)
-        console.log('   Searching for client...');
+        // Normalize phone for comparison (remove all non-digits)
+        const normalizePhone = (phone) => phone ? phone.replace(/\D/g, '') : '';
+        
+        // For phone searches, extract the local number (last 8 digits for Panama)
+        const getLocalNumber = (phone) => {
+            const normalized = normalizePhone(phone);
+            return normalized.length > 8 ? normalized.slice(-8) : normalized;
+        };
+        
+        const isPhone = searchType === 'phone' || (/^[\d\s\-\+\(\)\.]+$/.test(username) && !username.includes('@'));
+        const searchLocal = getLocalNumber(username);
+        
+        // For phone searches, use last 6-7 digits to get broader results from Mindbody
+        let searchQuery = username;
+        if (isPhone && searchLocal.length >= 7) {
+            // Use last 7 digits for search to get more potential matches
+            searchQuery = searchLocal.slice(-7);
+            console.log('   Using partial phone for broader search:', searchQuery);
+        }
+        
+        // Search for client using SearchText
+        console.log('   Searching Mindbody with query:', searchQuery);
         const searchResponse = await axios.get(
-            `${CONFIG.baseUrl}/client/clients?searchText=${encodeURIComponent(username)}`,
+            `${CONFIG.baseUrl}/client/clients?searchText=${encodeURIComponent(searchQuery)}&limit=100`,
             {
                 headers: {
                     'Api-Key': CONFIG.apiKey,
@@ -1627,21 +1647,12 @@ app.post('/api/clients/login', async (req, res) => {
         );
         
         const clients = searchResponse.data.Clients || [];
-        console.log('   Found', clients.length, 'potential matches from Mindbody');
+        console.log('   Mindbody returned', clients.length, 'clients');
         
-        // Normalize phone for comparison (remove all non-digits)
-        const normalizePhone = (phone) => phone ? phone.replace(/\D/g, '') : '';
-        const searchNormalized = normalizePhone(username);
-        
-        // For phone searches, extract the local number (last 8 digits for Panama)
-        const getLocalNumber = (phone) => {
-            const normalized = normalizePhone(phone);
-            // If number is longer than 8 digits, get last 8 (local number without country code)
-            return normalized.length > 8 ? normalized.slice(-8) : normalized;
-        };
-        
-        const searchLocal = getLocalNumber(username);
-        console.log('   Search normalized:', searchNormalized, '| Local:', searchLocal);
+        // Log all clients for debugging
+        clients.forEach(c => {
+            console.log('   - ', c.FirstName, c.LastName, '| Mobile:', c.MobilePhone, '| Email:', c.Email);
+        });
         
         // Filter to matching clients based on search type
         let matchingClients = [];
@@ -1651,7 +1662,7 @@ app.post('/api/clients/login', async (req, res) => {
             matchingClients = clients.filter(c => 
                 c.Email && c.Email.toLowerCase() === username.toLowerCase()
             );
-        } else if (searchType === 'phone' || /^[\d\s\-\+\(\)\.]+$/.test(username)) {
+        } else if (isPhone) {
             // Phone search - match against MobilePhone, HomePhone, WorkPhone
             // Use local number (last 8 digits) for flexible matching
             matchingClients = clients.filter(c => {
@@ -1659,10 +1670,10 @@ app.post('/api/clients/login', async (req, res) => {
                 const homeLocal = getLocalNumber(c.HomePhone);
                 const workLocal = getLocalNumber(c.WorkPhone);
                 
-                // Match if local numbers are equal or contain each other
-                const matches = (mobileLocal && (mobileLocal === searchLocal || mobileLocal.includes(searchLocal) || searchLocal.includes(mobileLocal))) ||
-                       (homeLocal && (homeLocal === searchLocal || homeLocal.includes(searchLocal) || searchLocal.includes(homeLocal))) ||
-                       (workLocal && (workLocal === searchLocal || workLocal.includes(searchLocal) || searchLocal.includes(workLocal)));
+                // Match if local numbers are equal
+                const matches = (mobileLocal && mobileLocal === searchLocal) ||
+                       (homeLocal && homeLocal === searchLocal) ||
+                       (workLocal && workLocal === searchLocal);
                 
                 if (matches) {
                     console.log('   ✓ Match:', c.FirstName, c.LastName, '| Mobile:', c.MobilePhone);
@@ -1677,7 +1688,7 @@ app.post('/api/clients/login', async (req, res) => {
             if (matchingClients.length === 0) {
                 matchingClients = clients.filter(c => {
                     const mobileLocal = getLocalNumber(c.MobilePhone);
-                    return mobileLocal && (mobileLocal === searchLocal || mobileLocal.includes(searchLocal) || searchLocal.includes(mobileLocal));
+                    return mobileLocal && mobileLocal === searchLocal;
                 });
             }
         }
