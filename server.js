@@ -1586,6 +1586,7 @@ app.get('/api/clients', async (req, res) => {
 /**
  * 10. Client Login - Find client by email or phone
  * Uses SearchText which searches across name, email, and phone fields
+ * Returns ALL matching clients so user can select their account
  */
 app.post('/api/clients/login', async (req, res) => {
     try {
@@ -1632,17 +1633,17 @@ app.post('/api/clients/login', async (req, res) => {
         const normalizePhone = (phone) => phone ? phone.replace(/\D/g, '') : '';
         const searchNormalized = normalizePhone(username);
         
-        // Find matching client based on search type
-        let client = null;
+        // Filter to matching clients based on search type
+        let matchingClients = [];
         
         if (searchType === 'email' || username.includes('@')) {
-            // Email search - exact match
-            client = clients.find(c => 
+            // Email search - exact match (case insensitive)
+            matchingClients = clients.filter(c => 
                 c.Email && c.Email.toLowerCase() === username.toLowerCase()
             );
         } else if (searchType === 'phone' || /^[\d\s\-\+\(\)]+$/.test(username)) {
             // Phone search - match against MobilePhone, HomePhone, WorkPhone
-            client = clients.find(c => {
+            matchingClients = clients.filter(c => {
                 const mobile = normalizePhone(c.MobilePhone);
                 const home = normalizePhone(c.HomePhone);
                 const work = normalizePhone(c.WorkPhone);
@@ -1654,24 +1655,29 @@ app.post('/api/clients/login', async (req, res) => {
             });
         } else {
             // Fallback - try email first, then phone
-            client = clients.find(c => 
+            matchingClients = clients.filter(c => 
                 c.Email && c.Email.toLowerCase() === username.toLowerCase()
-            ) || clients.find(c => {
-                const mobile = normalizePhone(c.MobilePhone);
-                return mobile && mobile.includes(searchNormalized);
-            });
+            );
+            if (matchingClients.length === 0) {
+                matchingClients = clients.filter(c => {
+                    const mobile = normalizePhone(c.MobilePhone);
+                    return mobile && mobile.includes(searchNormalized);
+                });
+            }
         }
         
-        if (client) {
-            console.log('✅ Client found:', client.FirstName, client.LastName);
+        if (matchingClients.length > 0) {
+            console.log('✅ Found', matchingClients.length, 'matching client(s):', 
+                matchingClients.map(c => `${c.FirstName} ${c.LastName}`).join(', '));
             
             res.json({
                 success: true,
-                client: client,
-                message: 'Cliente encontrado'
+                clients: matchingClients,
+                client: matchingClients.length === 1 ? matchingClients[0] : null,
+                message: matchingClients.length === 1 ? 'Cliente encontrado' : `${matchingClients.length} cuentas encontradas`
             });
         } else {
-            console.log('❌ Client not found with:', username);
+            console.log('❌ No clients found with:', username);
             res.status(401).json({
                 success: false,
                 error: 'No se encontró una cuenta con este email o teléfono. ¿Necesitas crear una cuenta?',
